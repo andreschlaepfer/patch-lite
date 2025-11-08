@@ -1,18 +1,20 @@
 use std::vec;
-
-use iced::Theme;
+mod json_highlight;
 use iced::application::View;
 use iced::{
     Background, Color, Font,
     font::Family,
     widget::{
-        PickList, Rule, Scrollable, TextInput, button, column, horizontal_rule, pick_list, row,
+        PickList, Rule, Scrollable, Space, TextInput, button, column, horizontal_rule, pick_list,
+        row,
         scrollable::{Direction, Scrollbar, Viewport},
         text, text_input,
         text_input::{Icon, Side},
+        vertical_space,
     },
 };
-
+use iced::{Task, Theme};
+use reqwest::{Error, Response};
 fn main() -> iced::Result {
     iced::application("PatchLite", App::update, App::view).run()
 }
@@ -29,10 +31,12 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
+    Noop,
     UpdateUrl(String),
     SendRequest,
     UpdateMethod(HttpMethod),
     Scrolled(Viewport),
+    RequestCompleted(Result<String, String>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,87 +67,52 @@ impl ToString for HttpMethod {
     }
 }
 
+#[derive(Default)]
+struct HttpMethodComponent {
+    method: HttpMethod,
+    color: Color,
+}
+
 impl App {
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Noop => {}
             Message::UpdateUrl(new_url) => {
                 self.url = new_url;
             }
             Message::SendRequest => {
                 if self.url.is_empty() {
                     println!("URL is empty!");
-                    return;
                 }
+
+                //https://consultafundo.com.br/api/v1/data?taxPayerId=34.430.477/0001-29
                 println!("Sending request to {}", self.url);
-                self.response_message = String::from(
-                    "[
-    {
-        \"id\": 74532628,
-        \"dataPatrimonioLiquido\": \"2025-09-30T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-10-15T00:00:00.000Z\",
-        \"numeroContas\": 2959877,
-        \"valorPatrimonioLiquido\": 114532364.28
-    },
-    {
-        \"id\": 74051786,
-        \"dataPatrimonioLiquido\": \"2025-08-31T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-09-15T00:00:00.000Z\",
-        \"numeroContas\": 2959877,
-        \"valorPatrimonioLiquido\": 104500880.75
-    },
-    {
-        \"id\": 73497634,
-        \"dataPatrimonioLiquido\": \"2025-07-31T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-08-19T00:00:00.000Z\",
-        \"numeroContas\": 2959877,
-        \"valorPatrimonioLiquido\": 102868164.54
-    },
-    {
-        \"id\": 72859533,
-        \"dataPatrimonioLiquido\": \"2025-06-30T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-08-14T00:00:00.000Z\",
-        \"numeroContas\": 2959877,
-        \"valorPatrimonioLiquido\": 101619621.28
-    },
-    {
-        \"id\": 72664547,
-        \"dataPatrimonioLiquido\": \"2025-05-31T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-06-16T00:00:00.000Z\",
-        \"numeroContas\": 2927265,
-        \"valorPatrimonioLiquido\": 97310294.66
-    },
-    {
-        \"id\": 72664060,
-        \"dataPatrimonioLiquido\": \"2025-04-30T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-05-29T00:00:00.000Z\",
-        \"numeroContas\": 2889720,
-        \"valorPatrimonioLiquido\": 95681744.35
-    },
-    {
-        \"id\": 73969245,
-        \"dataPatrimonioLiquido\": \"2025-03-31T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-04-15T00:00:00.000Z\",
-        \"numeroContas\": 1444860,
-        \"valorPatrimonioLiquido\": 94790355.26
-    },
-    {
-        \"id\": 73969362,
-        \"dataPatrimonioLiquido\": \"2025-02-28T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-04-15T00:00:00.000Z\",
-        \"numeroContas\": 1444860,
-        \"valorPatrimonioLiquido\": 94910848.22
-    },
-    {
-        \"id\": 73573482,
-        \"dataPatrimonioLiquido\": \"2025-01-31T00:00:00.000Z\",
-        \"dataAtualizacao\": \"2025-02-17T00:00:00.000Z\",
-        \"numeroContas\": 1444860,
-        \"valorPatrimonioLiquido\": 95019242.14
-    }
-]",
-                )
-                .into();
+                let self_url = self.url.clone();
+                return Task::perform(
+                    async {
+                        let api_client = reqwest::Client::new();
+                        let result: Result<Response, Error> = api_client.get(self_url).send().await;
+
+                        match result {
+                            Ok(response) => {
+                                let status = response.status();
+                                let body = response.text().await.unwrap_or_default();
+                                Ok(format!("Status: {}\nBody:\n{}", status, body))
+                            }
+                            Err(e) => Err(format!("Request failed: {}", e)),
+                        }
+                    },
+                    Message::RequestCompleted,
+                );
             }
+            Message::RequestCompleted(result) => match result {
+                Ok(response) => {
+                    self.response_message = response.into();
+                }
+                Err(e) => {
+                    self.response_message = e.into();
+                }
+            },
             Message::UpdateMethod(new_method) => {
                 self.method = Some(new_method);
             }
@@ -152,6 +121,7 @@ impl App {
                     format!("{} {}", v.absolute_offset().x, v.absolute_offset().y)
             }
         }
+        Task::none()
     }
 
     fn view(&self) -> iced::Element<'_, Message> {
@@ -163,11 +133,10 @@ impl App {
             HttpMethod::DELETE,
         ];
 
-        let response = column(
-            (self.response_message.as_deref().unwrap_or(""))
-                .split("\n")
-                .map(|i| text(format!("{}", i)).into()),
-        );
+        let highlighted_response =
+            json_highlight::pretty_json_str(self.response_message.as_deref().unwrap_or(""));
+
+        let response = column([text(highlighted_response).into()]);
 
         column![
             row![
@@ -180,6 +149,7 @@ impl App {
             .padding(10),
             horizontal_rule(50),
             text("Response will be shown here."),
+            Space::with_height(20),
             column![
                 Scrollable::new(response)
                     .width(1000)
@@ -188,6 +158,7 @@ impl App {
                     .on_scroll(Message::Scrolled),
                 text(&self.response_message_offset),
             ]
+            .spacing(20)
         ]
         .into()
     }
