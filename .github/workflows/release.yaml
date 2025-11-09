@@ -46,14 +46,14 @@ jobs:
           mkdir -p dist
           # copie seu binário (ajuste o nome do binário conforme seu Cargo.toml)
           SRC="target/${{ matrix.target }}/release/${{ matrix.bin_name }}"
-          DEST="dist/${{ matrix.zip_name }}"
-          cp "$SRC" "$DEST"
 
           if [ "${{ runner.os }}" = "Windows" ]; then
-            cp "$SRC" "dist/${{ matrix.zip_name }}.exe"
-          else           
-            cp "$SRC" "$DEST"
+            DEST="dist/PatchLite.exe"                 
+          else
+            DEST="dist/PatchLite"                     
           fi
+
+          cp "$SRC" "$DEST"
 
           # inclua README/licença se quiser no zip
           cp README.md dist/ 2>/dev/null || true
@@ -92,7 +92,7 @@ jobs:
         run: |
           # apaga a release da tag atual, se existir; não falha se não existir
           gh release delete "${GITHUB_REF_NAME}" -y || true
-          
+
       - name: Gather assets
         run: |
           mkdir upload
