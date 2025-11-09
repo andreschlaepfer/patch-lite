@@ -1,5 +1,5 @@
 use core::str;
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Error, Response};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,11 +116,19 @@ impl HttpRequest {
                             req.basic_auth(self.username.clone(), Some(self.password.clone()))
                         }
                     };
-
-                    if self.body.is_some() && !self.body.as_ref().unwrap().is_empty() {
-                        req = req.body(self.body.as_ref().unwrap().clone());
+                    req = req.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+                    let mut out_body = String::new();
+                    if let Some(body) = self.body.as_ref().filter(|b| !b.trim().is_empty()) {
+                        // valida se o JSON é válido antes de enviar
+                        if serde_json::from_str::<serde_json::Value>(body).is_ok() {
+                            req = req.body(body.clone());
+                            println!("Body adicionado! Body \n {}", body);
+                        } else {
+                            println!("Body inválido, ignorado: {}", body);
+                        }
+                        out_body = body.clone();
                     }
-
+                    println!("Body da request \n {}", out_body);
                     req.send().await
                 }
                 HttpMethod::PUT => {

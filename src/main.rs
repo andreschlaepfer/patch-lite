@@ -11,7 +11,7 @@ use iced::{
         PickList, Rule, Scrollable, Space, TextInput, button, column, horizontal_rule, pick_list,
         radio, row,
         scrollable::{Direction, Scrollbar, Viewport},
-        text, text_input,
+        text, text_editor, text_input,
         text_input::{Icon, Side},
         vertical_space,
     },
@@ -33,6 +33,8 @@ struct App {
     response_message: Option<String>,
     response_message_offset: String,
     request: HttpRequest,
+    tab: Tab,
+    request_body_content: text_editor::Content,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,44 @@ enum Message {
     Scrolled(Viewport),
     RequestCompleted(Result<String, String>),
     Clear,
+    UpdateBody(text_editor::Action),
+    UpdateTab(Tab),
+    UpdateUsername(String),
+    UpdatePassword(String),
+    UpdateToken(String),
+}
+
+#[derive(Debug, Clone)]
+enum Tab {
+    None,
+    Auth,
+    Headers,
+    Body,
+}
+
+impl Default for Tab {
+    fn default() -> Self {
+        Tab::None
+    }
+}
+impl Tab {
+    pub fn to_int(&self) -> Option<u8> {
+        match self {
+            Tab::None => Some(0),
+            Tab::Auth => Some(1),
+            Tab::Headers => Some(2),
+            Tab::Body => Some(3),
+        }
+    }
+    pub fn from_int(i: u8) -> Self {
+        match i {
+            0 => Tab::None,
+            1 => Tab::Auth,
+            2 => Tab::Headers,
+            3 => Tab::Body,
+            _ => Tab::None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -65,6 +105,7 @@ impl App {
 
                 //https://consultafundo.com.br/api/v1/data?taxPayerId=34.430.477/0001-29
                 println!("Sending request to {}", self.request.url);
+                println!("Sending request body {:?}", self.request.body);
 
                 let req = self.request.clone();
                 return Task::perform(
@@ -97,6 +138,24 @@ impl App {
             Message::UpdateAuth(auth_type) => {
                 self.request.auth = auth_type;
             }
+            Message::UpdateTab(tab) => {
+                self.tab = tab;
+            }
+            Message::UpdateUsername(username) => {
+                self.request.username = username;
+            }
+            Message::UpdatePassword(password) => {
+                self.request.password = password;
+            }
+            Message::UpdateToken(token) => {
+                self.request.token = token;
+            }
+
+            Message::UpdateBody(action) => {
+                self.request_body_content.perform(action);
+                self.request.body = self.request_body_content.text().to_string().into();
+            }
+
             Message::Scrolled(v) => {
                 self.response_message_offset =
                     format!("{} {}", v.absolute_offset().x, v.absolute_offset().y)
@@ -129,7 +188,7 @@ impl App {
         let response = column([text(highlighted_response).into()]);
 
         //todo add PaneGrid
-        let app_view = column![
+        let mut content = column![
             row![
                 pick_list(method_pick_list, self.request.method, Message::UpdateMethod,)
                     .placeholder("Select Method"),
@@ -138,24 +197,99 @@ impl App {
             ]
             .spacing(10)
             .padding(10),
-            horizontal_rule(50),
-            row![text("Authentication:")].padding(10),
+            horizontal_rule(20),
             row![
-                radio("No Auth", 0, self.request.auth.to_int(), |i| {
-                    Message::UpdateAuth(Auth::from_int(i))
+                radio("Closed", 0, self.tab.to_int(), |i| {
+                    Message::UpdateTab(Tab::from_int(i))
                 }),
-                radio("Basic", 1, self.request.auth.to_int(), |i| {
-                    Message::UpdateAuth(Auth::from_int(i))
+                radio("Auth", 1, self.tab.to_int(), |i| {
+                    Message::UpdateTab(Tab::from_int(i))
                 }),
-                radio("Bearer", 2, self.request.auth.to_int(), |i| {
-                    Message::UpdateAuth(Auth::from_int(i))
+                radio("Headers", 2, self.tab.to_int(), |i| {
+                    Message::UpdateTab(Tab::from_int(i))
                 }),
+                radio("Body", 3, self.tab.to_int(), |i| {
+                    Message::UpdateTab(Tab::from_int(i))
+                })
             ]
             .spacing(10)
             .padding(10),
             horizontal_rule(50),
-            text("Response will be shown here."),
-            Space::with_height(20),
+        ];
+
+        match self.tab {
+            Tab::None => {}
+            Tab::Auth => {
+                content = content.push(column![
+                    row![
+                        radio("No Auth", 0, self.request.auth.to_int(), |i| {
+                            Message::UpdateAuth(Auth::from_int(i))
+                        }),
+                        radio("Basic", 1, self.request.auth.to_int(), |i| {
+                            Message::UpdateAuth(Auth::from_int(i))
+                        }),
+                        radio("Bearer", 2, self.request.auth.to_int(), |i| {
+                            Message::UpdateAuth(Auth::from_int(i))
+                        }),
+                    ]
+                    .spacing(10)
+                    .padding(10),
+                    horizontal_rule(50),
+                ]);
+                match self.request.auth {
+                    Auth::Basic => {
+                        content = content.push(
+                            column![
+                                text("Basic Authentication selected."),
+                                text_input("Username", self.request.username.as_str())
+                                    .on_input(|s| Message::UpdateUsername(s)),
+                                text_input("Password", self.request.password.as_str())
+                                    .on_input(|s| Message::UpdatePassword(s)),
+                            ]
+                            .spacing(10)
+                            .padding(10),
+                        );
+                    }
+                    Auth::Bearer => {
+                        content = content.push(
+                            column![
+                                text("Bearer Authentication selected."),
+                                text_input(
+                                    "Token", "" // You can bind this to a state variable
+                                )
+                                .on_input(|s| Message::UpdateToken(s)),
+                            ]
+                            .spacing(10)
+                            .padding(10),
+                        );
+                    }
+                    Auth::None => {}
+                }
+            }
+            Tab::Headers => {
+                content = content.push(
+                    column![text("Headers configuration will go here."),]
+                        .spacing(10)
+                        .padding(10),
+                );
+            }
+            Tab::Body => {
+                content = content.push(
+                    column![
+                        text("Request Body:"),
+                        text_editor(&self.request_body_content)
+                            .placeholder("Type something here...")
+                            .on_action(Message::UpdateBody),
+                    ]
+                    .spacing(10)
+                    .padding(10),
+                );
+            }
+        }
+
+        content = content.push(horizontal_rule(50));
+
+        content = content.push(
             column![
                 Scrollable::new(response)
                     .width(1000)
@@ -165,11 +299,10 @@ impl App {
                 text(&self.response_message_offset),
             ]
             .spacing(20),
-            row![button("Clear").on_press(Message::Clear),]
-        ];
+        );
+        content = content.push(row![button("Clear").on_press(Message::Clear),]);
 
-        //let container = Self::container().padding(20).spacing(10).push(app_view);
-        app_view.into()
+        content.into()
     }
 }
 
