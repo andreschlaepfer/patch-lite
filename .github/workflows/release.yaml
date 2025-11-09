@@ -16,15 +16,15 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             bin_name: patch-lite
-            out_name: PatchLite-linux
+            zip_name: PatchLite-linux
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin_name: patch-lite.exe
-            out_name: PatchLite.exe
+            zip_name: PatchLite
           - os: macos-latest
             target: aarch64-apple-darwin
             bin_name: patch-lite
-            out_name: PatchLite-macos-arm64
+            zip_name: PatchLite-macos-arm64
 
 
     runs-on: ${{ matrix.os }}
@@ -46,8 +46,14 @@ jobs:
           mkdir -p dist
           # copie seu binário (ajuste o nome do binário conforme seu Cargo.toml)
           SRC="target/${{ matrix.target }}/release/${{ matrix.bin_name }}"
-          DEST="dist/${{ matrix.out_name }}"
+          DEST="dist/${{ matrix.zip_name }}"
           cp "$SRC" "$DEST"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$SRC" "dist/${{ matrix.zip_name }}.exe"
+          else           
+            cp "$SRC" "$DEST"
+          fi
 
           # inclua README/licença se quiser no zip
           cp README.md dist/ 2>/dev/null || true
@@ -55,22 +61,22 @@ jobs:
 
           # compacte
           if [ "${{ runner.os }}" = "Windows" ]; then
-            7z a "${{ matrix.out_name }}.zip" "./dist/*"
-            echo "$(sha256sum "${{ matrix.out_name }}.zip" | awk '{print $1}')  ${{ matrix.out_name }}.zip" > "SHA256SUMS-${{ matrix.out_name }}.txt"
+            7z a "${{ matrix.zip_name }}.zip" "./dist/*"
+            echo "$(sha256sum "${{ matrix.zip_name }}.zip" | awk '{print $1}')  ${{ matrix.zip_name }}.zip" > "SHA256SUMS-${{ matrix.zip_name }}.txt"
           else
             cd dist
-            zip -r "../${{ matrix.out_name }}.zip" *
+            zip -r "../${{ matrix.zip_name }}.zip" *
             cd ..
-            shasum -a 256 "${{ matrix.out_name }}.zip" | awk '{print $1"  "$2}' > "SHA256SUMS-${{ matrix.out_name }}.txt"
+            shasum -a 256 "${{ matrix.zip_name }}.zip" | awk '{print $1"  "$2}' > "SHA256SUMS-${{ matrix.zip_name }}.txt"
           fi
 
       - name: Upload artifact (for this job)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.out_name }}
+          name: ${{ matrix.zip_name }}
           path: |
-            ${{ matrix.out_name }}.zip
-            SHA256SUMS-${{ matrix.out_name }}.txt
+            ${{ matrix.zip_name }}.zip
+            SHA256SUMS-${{ matrix.zip_name }}.txt
 
   publish:
     needs: build
@@ -80,6 +86,13 @@ jobs:
         with:
           path: ./artifacts
 
+      - name: Delete existing release (if any)
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # apaga a release da tag atual, se existir; não falha se não existir
+          gh release delete "${GITHUB_REF_NAME}" -y || true
+          
       - name: Gather assets
         run: |
           mkdir upload
