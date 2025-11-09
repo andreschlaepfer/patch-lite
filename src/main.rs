@@ -4,10 +4,15 @@ mod json_highlight;
 mod request;
 
 use crate::request::{Auth, HttpMethod, HttpRequest};
-use iced::widget::{
-    Scrollable, button, column, horizontal_rule, pick_list, radio, row,
-    scrollable::{Direction, Scrollbar, Viewport},
-    text, text_editor, text_input,
+use iced::{
+    Length,
+    widget::{
+        Scrollable, button, column, horizontal_rule, pick_list, radio, row,
+        scrollable::{Direction, Scrollbar, Viewport},
+        text, text_editor,
+        text_editor::{Action, Content},
+        text_input,
+    },
 };
 
 use iced::Task;
@@ -24,6 +29,7 @@ struct App {
     request_headers: Vec<(String, String)>,
     response_message: Option<String>,
     response_message_offset: String,
+    response_message_content: text_editor::Content,
     request: HttpRequest,
     tab: Tab,
     request_body_content: text_editor::Content,
@@ -48,6 +54,7 @@ enum Message {
     UpdateHeaderValue(usize, String),
     RemoveHeaderRow(usize),
     AddHeaderRow,
+    ResponseEditor(text_editor::Action),
 }
 
 #[derive(Debug, Clone)]
@@ -122,10 +129,13 @@ impl App {
             }
             Message::RequestCompleted(result) => match result {
                 Ok(response) => {
-                    self.response_message = response.into();
+                    self.response_message = response.clone().into();
+                    self.response_message_content =
+                        text_editor::Content::with_text(response.as_str());
                 }
                 Err(e) => {
-                    self.response_message = e.into();
+                    self.response_message = e.clone().into();
+                    self.response_message_content = text_editor::Content::with_text(e.as_str());
                 }
             },
             Message::UpdateMethod(new_method) => {
@@ -151,6 +161,10 @@ impl App {
                 self.request_body_content.perform(action);
                 self.request.body = self.request_body_content.text().to_string().into();
             }
+            Message::ResponseEditor(action) => match &action {
+                Action::Edit(_) => {}
+                _ => self.response_message_content.perform(action),
+            },
             Message::UpdateHeaderKey(i, key) => {
                 if let Some(_header) = self.request_headers.get_mut(i) {
                     self.request_headers[i].0 = key;
@@ -198,7 +212,7 @@ impl App {
         let highlighted_response =
             json_highlight::pretty_json_str(self.response_message.as_deref().unwrap_or(""));
 
-        let response = column([text(highlighted_response).into()]);
+        //let response = column([text_editor(highlighted_response).into()]);
 
         //todo add PaneGrid
         let mut content = column![
@@ -324,12 +338,11 @@ impl App {
 
         content = content.push(
             column![
-                Scrollable::new(response)
-                    .width(1000)
-                    .height(1000)
-                    .direction(Direction::Vertical(Scrollbar::new()))
-                    .on_scroll(Message::Scrolled),
-                text(&self.response_message_offset),
+                text_editor(&self.response_message_content)
+                    .wrapping(text::Wrapping::Word) // quebra por palavra
+                    .width(1000.0)
+                    .height(Length::Fixed(1000.0))
+                    .on_action(Message::ResponseEditor),
             ]
             .spacing(20),
         );
