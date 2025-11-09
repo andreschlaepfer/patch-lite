@@ -1,5 +1,4 @@
-use core::str;
-use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::{CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use reqwest::{Error, Response};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,13 +77,23 @@ pub struct HttpRequest {
 }
 
 impl HttpRequest {
-    pub fn new(method: Option<HttpMethod>, url: impl Into<String>) -> Self {
-        Self {
-            method,
-            url: url.into(),
-            ..Default::default()
-        }
+    pub fn set_default_headers(&mut self) {
+        self.headers
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     }
+
+    pub fn set_headers(&mut self, headers_vec: &Vec<(String, String)>) {
+        let mut header_map = HeaderMap::new();
+        for (key, value) in headers_vec {
+            if let Ok(header_name) = key.parse::<HeaderName>() {
+                if let Ok(header_value) = value.parse() {
+                    header_map.insert(header_name, header_value);
+                }
+            }
+        }
+        self.headers = header_map;
+    }
+
     pub async fn send(&self) -> Result<Response, Error> {
         let api_client = reqwest::Client::new();
         match self.method {
@@ -116,19 +125,13 @@ impl HttpRequest {
                             req.basic_auth(self.username.clone(), Some(self.password.clone()))
                         }
                     };
-                    req = req.header(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-                    let mut out_body = String::new();
+
                     if let Some(body) = self.body.as_ref().filter(|b| !b.trim().is_empty()) {
-                        // valida se o JSON é válido antes de enviar
                         if serde_json::from_str::<serde_json::Value>(body).is_ok() {
                             req = req.body(body.clone());
-                            println!("Body adicionado! Body \n {}", body);
-                        } else {
-                            println!("Body inválido, ignorado: {}", body);
                         }
-                        out_body = body.clone();
                     }
-                    println!("Body da request \n {}", out_body);
+
                     req.send().await
                 }
                 HttpMethod::PUT => {

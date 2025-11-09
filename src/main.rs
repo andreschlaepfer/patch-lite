@@ -1,31 +1,21 @@
-use std::vec;
 mod json_highlight;
 mod request;
 
 use crate::request::{Auth, HttpMethod, HttpRequest};
-use iced::application::View;
-use iced::{
-    Background, Color, Font,
-    font::Family,
-    widget::{
-        PickList, Rule, Scrollable, Space, TextInput, button, column, horizontal_rule, pick_list,
-        radio, row,
-        scrollable::{Direction, Scrollbar, Viewport},
-        text, text_editor, text_input,
-        text_input::{Icon, Side},
-        vertical_space,
-    },
+use iced::widget::{
+    Scrollable, button, column, horizontal_rule, pick_list, radio, row,
+    scrollable::{Direction, Scrollbar, Viewport},
+    text, text_editor, text_input,
 };
 
-use iced::{Task, Theme};
-use reqwest::{Error, Response};
+use iced::Task;
+
 fn main() -> iced::Result {
-    iced::application("PatchLite", App::update, App::view).run()
+    iced::application("PatchLite", App::update, App::view).run_with(App::new)
 }
 
 #[derive(Default)]
 struct App {
-    theme: iced::Theme,
     url: String,
     method: Option<HttpMethod>,
     request_body: Option<String>,
@@ -39,6 +29,7 @@ struct App {
 
 #[derive(Debug, Clone)]
 enum Message {
+    Init,
     UpdateUrl(String),
     SendRequest,
     UpdateMethod(HttpMethod),
@@ -51,6 +42,10 @@ enum Message {
     UpdateUsername(String),
     UpdatePassword(String),
     UpdateToken(String),
+    UpdateHeaderKey(usize, String),
+    UpdateHeaderValue(usize, String),
+    RemoveHeaderRow(usize),
+    AddHeaderRow,
 }
 
 #[derive(Debug, Clone)]
@@ -86,15 +81,16 @@ impl Tab {
     }
 }
 
-#[derive(Default)]
-struct HttpMethodComponent {
-    method: HttpMethod,
-    color: Color,
-}
+// #[derive(Default)]
+// struct HttpMethodComponent {
+//     method: HttpMethod,
+//     color: Color,
+// }
 
 impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::Init => {}
             Message::UpdateUrl(new_url) => {
                 self.request.url = new_url;
             }
@@ -103,9 +99,7 @@ impl App {
                     println!("URL is empty!");
                 }
 
-                //https://consultafundo.com.br/api/v1/data?taxPayerId=34.430.477/0001-29
-                println!("Sending request to {}", self.request.url);
-                println!("Sending request body {:?}", self.request.body);
+                self.request.set_headers(&self.request_headers);
 
                 let req = self.request.clone();
                 return Task::perform(
@@ -155,7 +149,24 @@ impl App {
                 self.request_body_content.perform(action);
                 self.request.body = self.request_body_content.text().to_string().into();
             }
-
+            Message::UpdateHeaderKey(i, key) => {
+                if let Some(header) = self.request_headers.get_mut(i) {
+                    self.request_headers[i].0 = key;
+                }
+            }
+            Message::UpdateHeaderValue(i, value) => {
+                if let Some(header) = self.request_headers.get_mut(i) {
+                    self.request_headers[i].1 = value;
+                }
+            }
+            Message::RemoveHeaderRow(i) => {
+                if i < self.request_headers.len() {
+                    self.request_headers.remove(i);
+                }
+            }
+            Message::AddHeaderRow => {
+                self.request_headers.push((String::new(), String::new()));
+            }
             Message::Scrolled(v) => {
                 self.response_message_offset =
                     format!("{} {}", v.absolute_offset().x, v.absolute_offset().y)
@@ -254,10 +265,8 @@ impl App {
                         content = content.push(
                             column![
                                 text("Bearer Authentication selected."),
-                                text_input(
-                                    "Token", "" // You can bind this to a state variable
-                                )
-                                .on_input(|s| Message::UpdateToken(s)),
+                                text_input("Token", self.request.token.as_str())
+                                    .on_input(|s| Message::UpdateToken(s)),
                             ]
                             .spacing(10)
                             .padding(10),
@@ -268,10 +277,32 @@ impl App {
             }
             Tab::Headers => {
                 content = content.push(
-                    column![text("Headers configuration will go here."),]
+                    column![
+                        text("Headers configuration will go here."),
+                        row![
+                            text("Key"),
+                            text("Value"),
+                            text("       "),
+                            button("Add Header +").on_press(Message::AddHeaderRow),
+                        ]
                         .spacing(10)
                         .padding(10),
+                    ]
+                    .spacing(10)
+                    .padding(10),
                 );
+                for (i, (key, value)) in self.request_headers.iter().enumerate() {
+                    content = content.push(
+                        row![
+                            text_input("", key.as_str())
+                                .on_input(move |k| Message::UpdateHeaderKey(i, k)),
+                            text_input("", value.as_str())
+                                .on_input(move |v| Message::UpdateHeaderValue(i, v)),
+                            button("-").on_press(Message::RemoveHeaderRow(i)),
+                        ]
+                        .spacing(10),
+                    );
+                }
             }
             Tab::Body => {
                 content = content.push(
@@ -300,12 +331,26 @@ impl App {
             ]
             .spacing(20),
         );
-        content = content.push(row![button("Clear").on_press(Message::Clear),]);
+
+        //content = content.push(row![button("Clear").on_press(Message::Clear),]);
 
         content.into()
     }
+
+    fn new() -> (Self, Task<Message>) {
+        let mut app = Self::default();
+        app.request.set_default_headers();
+        app.request_headers = app
+            .request
+            .headers
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_str().unwrap().to_string()))
+            .collect();
+        let task = Task::perform(async {}, |_| Message::Init);
+        (app, task)
+    }
 }
 
-fn theme(state: &App) -> Theme {
-    Theme::TokyoNight
-}
+// fn theme(state: &App) -> Theme {
+//     Theme::TokyoNight
+// }
