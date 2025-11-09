@@ -2,14 +2,14 @@ use std::vec;
 mod json_highlight;
 mod request;
 
-use crate::request::{HttpMethod, HttpRequest};
+use crate::request::{Auth, HttpMethod, HttpRequest};
 use iced::application::View;
 use iced::{
     Background, Color, Font,
     font::Family,
     widget::{
         PickList, Rule, Scrollable, Space, TextInput, button, column, horizontal_rule, pick_list,
-        row,
+        radio, row,
         scrollable::{Direction, Scrollbar, Viewport},
         text, text_input,
         text_input::{Icon, Side},
@@ -40,6 +40,7 @@ enum Message {
     UpdateUrl(String),
     SendRequest,
     UpdateMethod(HttpMethod),
+    UpdateAuth(Auth),
     Scrolled(Viewport),
     RequestCompleted(Result<String, String>),
     Clear,
@@ -58,12 +59,12 @@ impl App {
                 self.request.url = new_url;
             }
             Message::SendRequest => {
-                if self.url.is_empty() {
+                if self.request.url.is_empty() {
                     println!("URL is empty!");
                 }
 
                 //https://consultafundo.com.br/api/v1/data?taxPayerId=34.430.477/0001-29
-                println!("Sending request to {}", self.url);
+                println!("Sending request to {}", self.request.url);
 
                 let req = self.request.clone();
                 return Task::perform(
@@ -92,6 +93,9 @@ impl App {
             },
             Message::UpdateMethod(new_method) => {
                 self.request.method = Some(new_method);
+            }
+            Message::UpdateAuth(auth_type) => {
+                self.request.auth = auth_type;
             }
             Message::Scrolled(v) => {
                 self.response_message_offset =
@@ -124,12 +128,28 @@ impl App {
 
         let response = column([text(highlighted_response).into()]);
 
-        column![
+        //todo add PaneGrid
+        let app_view = column![
             row![
                 pick_list(method_pick_list, self.request.method, Message::UpdateMethod,)
                     .placeholder("Select Method"),
-                text_input("", self.url.as_str()).on_input(|s| Message::UpdateUrl(s)),
+                text_input("", self.request.url.as_str()).on_input(|s| Message::UpdateUrl(s)),
                 button("Send").on_press(Message::SendRequest),
+            ]
+            .spacing(10)
+            .padding(10),
+            horizontal_rule(50),
+            row![text("Authentication:")].padding(10),
+            row![
+                radio("No Auth", 0, self.request.auth.to_int(), |i| {
+                    Message::UpdateAuth(Auth::from_int(i))
+                }),
+                radio("Basic", 1, self.request.auth.to_int(), |i| {
+                    Message::UpdateAuth(Auth::from_int(i))
+                }),
+                radio("Bearer", 2, self.request.auth.to_int(), |i| {
+                    Message::UpdateAuth(Auth::from_int(i))
+                }),
             ]
             .spacing(10)
             .padding(10),
@@ -146,8 +166,10 @@ impl App {
             ]
             .spacing(20),
             row![button("Clear").on_press(Message::Clear),]
-        ]
-        .into()
+        ];
+
+        //let container = Self::container().padding(20).spacing(10).push(app_view);
+        app_view.into()
     }
 }
 

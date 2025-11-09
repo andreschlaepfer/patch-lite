@@ -18,6 +18,24 @@ pub enum Auth {
     Bearer,
 }
 
+impl Auth {
+    pub fn to_int(&self) -> Option<u8> {
+        match self {
+            Auth::None => Some(0),
+            Auth::Basic => Some(1),
+            Auth::Bearer => Some(2),
+        }
+    }
+    pub fn from_int(i: u8) -> Self {
+        match i {
+            0 => Auth::None,
+            1 => Auth::Basic,
+            2 => Auth::Bearer,
+            _ => Auth::None,
+        }
+    }
+}
+
 impl Default for Auth {
     fn default() -> Self {
         Auth::None
