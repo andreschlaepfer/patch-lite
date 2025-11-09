@@ -1,3 +1,5 @@
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod json_highlight;
 mod request;
 
@@ -150,12 +152,12 @@ impl App {
                 self.request.body = self.request_body_content.text().to_string().into();
             }
             Message::UpdateHeaderKey(i, key) => {
-                if let Some(header) = self.request_headers.get_mut(i) {
+                if let Some(_header) = self.request_headers.get_mut(i) {
                     self.request_headers[i].0 = key;
                 }
             }
             Message::UpdateHeaderValue(i, value) => {
-                if let Some(header) = self.request_headers.get_mut(i) {
+                if let Some(_header) = self.request_headers.get_mut(i) {
                     self.request_headers[i].1 = value;
                 }
             }
