@@ -20,7 +20,7 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             bin_name: patch-lite.exe
-            out_name: PatchLite-windows
+            out_name: PatchLite.exe
           - os: macos-latest
             target: aarch64-apple-darwin
             bin_name: patch-lite
