@@ -1,5 +1,8 @@
 use std::vec;
 mod json_highlight;
+mod request;
+
+use crate::request::{HttpMethod, HttpRequest};
 use iced::application::View;
 use iced::{
     Background, Color, Font,
@@ -13,6 +16,7 @@ use iced::{
         vertical_space,
     },
 };
+
 use iced::{Task, Theme};
 use reqwest::{Error, Response};
 fn main() -> iced::Result {
@@ -25,46 +29,20 @@ struct App {
     url: String,
     method: Option<HttpMethod>,
     request_body: Option<String>,
+    request_headers: Vec<(String, String)>,
     response_message: Option<String>,
     response_message_offset: String,
+    request: HttpRequest,
 }
 
 #[derive(Debug, Clone)]
 enum Message {
-    Noop,
     UpdateUrl(String),
     SendRequest,
     UpdateMethod(HttpMethod),
     Scrolled(Viewport),
     RequestCompleted(Result<String, String>),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HttpMethod {
-    GET,
-    POST,
-    PUT,
-    PATCH,
-    DELETE,
-}
-
-impl Default for HttpMethod {
-    fn default() -> Self {
-        HttpMethod::GET
-    }
-}
-
-impl ToString for HttpMethod {
-    fn to_string(&self) -> String {
-        match self {
-            HttpMethod::GET => "GET",
-            HttpMethod::POST => "POST",
-            HttpMethod::PUT => "PUT",
-            HttpMethod::PATCH => "PATCH",
-            HttpMethod::DELETE => "DELETE",
-        }
-        .to_string()
-    }
+    Clear,
 }
 
 #[derive(Default)]
@@ -76,9 +54,8 @@ struct HttpMethodComponent {
 impl App {
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Noop => {}
             Message::UpdateUrl(new_url) => {
-                self.url = new_url;
+                self.request.url = new_url;
             }
             Message::SendRequest => {
                 if self.url.is_empty() {
@@ -87,11 +64,11 @@ impl App {
 
                 //https://consultafundo.com.br/api/v1/data?taxPayerId=34.430.477/0001-29
                 println!("Sending request to {}", self.url);
-                let self_url = self.url.clone();
+
+                let req = self.request.clone();
                 return Task::perform(
-                    async {
-                        let api_client = reqwest::Client::new();
-                        let result: Result<Response, Error> = api_client.get(self_url).send().await;
+                    async move {
+                        let result = req.send().await;
 
                         match result {
                             Ok(response) => {
@@ -114,11 +91,20 @@ impl App {
                 }
             },
             Message::UpdateMethod(new_method) => {
-                self.method = Some(new_method);
+                self.request.method = Some(new_method);
             }
             Message::Scrolled(v) => {
                 self.response_message_offset =
                     format!("{} {}", v.absolute_offset().x, v.absolute_offset().y)
+            }
+            Message::Clear => {
+                self.response_message = None;
+                self.response_message_offset.clear();
+                self.method = None;
+                self.url.clear();
+                self.request_body = None;
+                self.request_headers.clear();
+                self.request = HttpRequest::default();
             }
         }
         Task::none()
@@ -140,7 +126,7 @@ impl App {
 
         column![
             row![
-                pick_list(method_pick_list, self.method, Message::UpdateMethod,)
+                pick_list(method_pick_list, self.request.method, Message::UpdateMethod,)
                     .placeholder("Select Method"),
                 text_input("", self.url.as_str()).on_input(|s| Message::UpdateUrl(s)),
                 button("Send").on_press(Message::SendRequest),
@@ -158,7 +144,8 @@ impl App {
                     .on_scroll(Message::Scrolled),
                 text(&self.response_message_offset),
             ]
-            .spacing(20)
+            .spacing(20),
+            row![button("Clear").on_press(Message::Clear),]
         ]
         .into()
     }
