@@ -4,7 +4,7 @@ use serde_json::Value;
 
 /// Tema de cores (estilo "Postman-ish").
 #[derive(Clone, Copy)]
-pub struct Theme {
+pub struct HighlightTheme {
     pub key: Color,
     pub string: Color,
     pub number: Color,
@@ -14,7 +14,7 @@ pub struct Theme {
     pub default: Color,
 }
 
-impl Default for Theme {
+impl Default for HighlightTheme {
     fn default() -> Self {
         Self {
             key: Color::from_rgb8(67, 156, 255),
@@ -39,7 +39,7 @@ pub fn rich_json_str(src: &str) -> Rich<'static, ()> {
                 Span::new(format!("❌ JSON inválido: {e}\n\n"))
                     .color(Color::from_rgb8(255, 100, 100)),
             );
-            spans.push(Span::new(src.to_owned()).color(Theme::default().default));
+            spans.push(Span::new(src.to_owned()).color(HighlightTheme::default().default));
             Rich::with_spans(spans).font(Font::MONOSPACE).size(14)
         }
     }
@@ -48,13 +48,13 @@ pub fn rich_json_str(src: &str) -> Rich<'static, ()> {
 /// Versão para `serde_json::Value`.
 pub fn rich_json_value(value: &Value) -> Rich<'static, ()> {
     let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| "<invalid json>".into());
-    rich_json_pretty_str(&pretty, Theme::default())
+    rich_json_pretty_str(&pretty, HighlightTheme::default())
 }
 
 /// Mesmo que `rich_json_str`, mas recebendo:
 /// - o JSON já "pretty" (com quebras e indentação)
 /// - um tema customizável
-pub fn rich_json_pretty_str(pretty_src: &str, theme: Theme) -> Rich<'static, ()> {
+pub fn rich_json_pretty_str(pretty_src: &str, theme: HighlightTheme) -> Rich<'static, ()> {
     let spans = json_to_spans(pretty_src, theme);
     Rich::with_spans(spans).font(Font::MONOSPACE).size(14)
 }
@@ -67,8 +67,9 @@ pub fn pretty_json_str(src: &str) -> String {
     }
 }
 
-fn json_to_spans(src: &str, th: Theme) -> Vec<Span<'static>> {
+fn json_to_spans(src: &str, th: HighlightTheme) -> Vec<Span<'static>> {
     #[derive(Clone, Copy)]
+    #[allow(dead_code)]
     enum Kind {
         Default,
         Key,

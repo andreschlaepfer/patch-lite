@@ -60,9 +60,18 @@ impl ToString for HttpMethod {
     }
 }
 
-// Insert headers example:
-// data.headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-// data.headers.insert(USER_AGENT, HeaderValue::from_static("PatchLite/0.1"));
+impl HttpMethod {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "GET" => Some(HttpMethod::GET),
+            "POST" => Some(HttpMethod::POST),
+            "PUT" => Some(HttpMethod::PUT),
+            "PATCH" => Some(HttpMethod::PATCH),
+            "DELETE" => Some(HttpMethod::DELETE),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Default, Clone)]
 pub struct HttpRequest {
@@ -94,106 +103,40 @@ impl HttpRequest {
         self.headers = header_map;
     }
 
-    pub async fn send(&self) -> Result<Response, Error> {
-        let api_client = reqwest::Client::new();
-        match self.method {
-            Some(m) => match m {
-                HttpMethod::GET => {
-                    let mut req = api_client
-                        .get(self.url.clone())
-                        .headers(self.headers.clone());
-
-                    req = match self.auth {
-                        Auth::None => req,
-                        Auth::Bearer => req.bearer_auth(self.token.clone()),
-                        Auth::Basic => {
-                            req.basic_auth(self.username.clone(), Some(self.password.clone()))
-                        }
-                    };
-
-                    req.send().await
-                }
-                HttpMethod::POST => {
-                    let mut req = api_client
-                        .post(self.url.clone())
-                        .headers(self.headers.clone());
-
-                    req = match self.auth {
-                        Auth::None => req,
-                        Auth::Bearer => req.bearer_auth(self.token.clone()),
-                        Auth::Basic => {
-                            req.basic_auth(self.username.clone(), Some(self.password.clone()))
-                        }
-                    };
-
-                    if let Some(body) = self.body.as_ref().filter(|b| !b.trim().is_empty()) {
-                        if serde_json::from_str::<serde_json::Value>(body).is_ok() {
-                            req = req.body(body.clone());
-                        }
-                    }
-
-                    req.send().await
-                }
-                HttpMethod::PUT => {
-                    let mut req = api_client
-                        .put(self.url.clone())
-                        .headers(self.headers.clone());
-
-                    req = match self.auth {
-                        Auth::None => req,
-                        Auth::Bearer => req.bearer_auth(self.token.clone()),
-                        Auth::Basic => {
-                            req.basic_auth(self.username.clone(), Some(self.password.clone()))
-                        }
-                    };
-
-                    if self.body.is_some() && !self.body.as_ref().unwrap().is_empty() {
-                        req = req.body(self.body.as_ref().unwrap().clone());
-                    }
-
-                    req.send().await
-                }
-                HttpMethod::PATCH => {
-                    let mut req = api_client
-                        .patch(self.url.clone())
-                        .headers(self.headers.clone());
-
-                    req = match self.auth {
-                        Auth::None => req,
-                        Auth::Bearer => req.bearer_auth(self.token.clone()),
-                        Auth::Basic => req.basic_auth("admin", Some("good password")),
-                    };
-
-                    if self.body.is_some() && !self.body.as_ref().unwrap().is_empty() {
-                        req = req.body(self.body.as_ref().unwrap().clone());
-                    }
-
-                    req.send().await
-                }
-                HttpMethod::DELETE => {
-                    let mut req = api_client
-                        .delete(self.url.clone())
-                        .headers(self.headers.clone());
-
-                    req = match self.auth {
-                        Auth::None => req,
-                        Auth::Bearer => req.bearer_auth(self.token.clone()),
-                        Auth::Basic => {
-                            req.basic_auth(self.username.clone(), Some(self.password.clone()))
-                        }
-                    };
-
-                    if self.body.is_some() && !self.body.as_ref().unwrap().is_empty() {
-                        req = req.body(self.body.as_ref().unwrap().clone());
-                    }
-
-                    req.send().await
-                }
-            },
-            None => {
-                let result = reqwest::get("http://url_invalida###").await;
-                result
-            }
+    fn apply_auth(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.auth {
+            Auth::None => req,
+            Auth::Bearer => req.bearer_auth(self.token.clone()),
+            Auth::Basic => req.basic_auth(self.username.clone(), Some(self.password.clone())),
         }
+    }
+
+    fn apply_body(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match self.body.as_ref().filter(|b| !b.trim().is_empty()) {
+            Some(body) => req.body(body.clone()),
+            None => req,
+        }
+    }
+
+    pub async fn send(&self) -> Result<Response, Error> {
+        let client = reqwest::Client::new();
+        let method = self.method.unwrap_or(HttpMethod::GET);
+
+        let builder = match method {
+            HttpMethod::GET => client.get(&self.url),
+            HttpMethod::POST => client.post(&self.url),
+            HttpMethod::PUT => client.put(&self.url),
+            HttpMethod::PATCH => client.patch(&self.url),
+            HttpMethod::DELETE => client.delete(&self.url),
+        };
+
+        let builder = builder.headers(self.headers.clone());
+        let builder = self.apply_auth(builder);
+        let builder = match method {
+            HttpMethod::GET => builder,
+            _ => self.apply_body(builder),
+        };
+
+        builder.send().await
     }
 }
