@@ -1,6 +1,7 @@
-use iced::widget::text::{Rich, Span};
+use iced::advanced::text::highlighter::{self, Highlighter};
 use iced::{Color, Font};
 use serde_json::Value;
+use std::ops::Range;
 
 /// Tema de cores (estilo "Postman-ish").
 #[derive(Clone, Copy)]
@@ -11,7 +12,6 @@ pub struct HighlightTheme {
     pub boolean: Color,
     pub null_: Color,
     pub punct: Color,
-    pub default: Color,
 }
 
 impl Default for HighlightTheme {
@@ -23,43 +23,11 @@ impl Default for HighlightTheme {
             boolean: Color::from_rgb8(189, 147, 249),
             null_: Color::from_rgb8(139, 139, 139),
             punct: Color::from_rgb8(120, 120, 120),
-            default: Color::from_rgb8(220, 220, 220),
         }
     }
 }
 
-/// Converte um `&str` contendo JSON em `Rich<'static, ()>`.
-/// Se o JSON for inválido, mostra um aviso + conteúdo original sem highlight.
-pub fn rich_json_str(src: &str) -> Rich<'static, ()> {
-    match serde_json::from_str::<Value>(src) {
-        Ok(v) => rich_json_value(&v),
-        Err(e) => {
-            let mut spans = Vec::new();
-            spans.push(
-                Span::new(format!("❌ JSON inválido: {e}\n\n"))
-                    .color(Color::from_rgb8(255, 100, 100)),
-            );
-            spans.push(Span::new(src.to_owned()).color(HighlightTheme::default().default));
-            Rich::with_spans(spans).font(Font::MONOSPACE).size(14)
-        }
-    }
-}
-
-/// Versão para `serde_json::Value`.
-pub fn rich_json_value(value: &Value) -> Rich<'static, ()> {
-    let pretty = serde_json::to_string_pretty(value).unwrap_or_else(|_| "<invalid json>".into());
-    rich_json_pretty_str(&pretty, HighlightTheme::default())
-}
-
-/// Mesmo que `rich_json_str`, mas recebendo:
-/// - o JSON já "pretty" (com quebras e indentação)
-/// - um tema customizável
-pub fn rich_json_pretty_str(pretty_src: &str, theme: HighlightTheme) -> Rich<'static, ()> {
-    let spans = json_to_spans(pretty_src, theme);
-    Rich::with_spans(spans).font(Font::MONOSPACE).size(14)
-}
-
-/// Útil para logs/clipboard: apenas identa (sem cores).
+/// Pretty-prints JSON (without colors).
 pub fn pretty_json_str(src: &str) -> String {
     match serde_json::from_str::<Value>(src) {
         Ok(v) => serde_json::to_string_pretty(&v).unwrap_or_else(|_| src.to_string()),
@@ -67,113 +35,125 @@ pub fn pretty_json_str(src: &str) -> String {
     }
 }
 
-fn json_to_spans(src: &str, th: HighlightTheme) -> Vec<Span<'static>> {
-    #[derive(Clone, Copy)]
-    #[allow(dead_code)]
-    enum Kind {
-        Default,
-        Key,
-        String,
-        Number,
-        Bool,
-        Null,
-        Punct,
+// --- text_editor Highlighter for JSON syntax highlighting ---
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JsonHighlighterSettings;
+
+pub struct JsonHighlighter {
+    current_line: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct JsonHighlight(Color);
+
+impl JsonHighlight {
+    pub fn to_format(&self) -> highlighter::Format<Font> {
+        highlighter::Format {
+            color: Some(self.0),
+            font: None,
+        }
+    }
+}
+
+impl Highlighter for JsonHighlighter {
+    type Settings = JsonHighlighterSettings;
+    type Highlight = JsonHighlight;
+    type Iterator<'a> = std::vec::IntoIter<(Range<usize>, Self::Highlight)>;
+
+    fn new(_settings: &Self::Settings) -> Self {
+        Self { current_line: 0 }
     }
 
-    let mut out: Vec<Span<'static>> = Vec::new();
-    let mut buf = String::new();
+    fn update(&mut self, _new_settings: &Self::Settings) {}
 
-    let chars: Vec<char> = src.chars().collect();
-    let mut i = 0usize;
-    let mut in_string = false;
-    let mut escape = false;
+    fn change_line(&mut self, line: usize) {
+        self.current_line = self.current_line.min(line);
+    }
 
-    let flush = |k: Kind, b: &mut String, out: &mut Vec<Span<'static>>| {
-        if b.is_empty() {
-            return;
-        }
-        let color = match k {
-            Kind::Key => th.key,
-            Kind::String => th.string,
-            Kind::Number => th.number,
-            Kind::Bool => th.boolean,
-            Kind::Null => th.null_,
-            Kind::Punct => th.punct,
-            Kind::Default => th.default,
-        };
-        out.push(Span::new(std::mem::take(b)).color(color));
-    };
+    fn highlight_line(&mut self, line: &str) -> Self::Iterator<'_> {
+        self.current_line += 1;
 
-    while i < chars.len() {
-        let c = chars[i];
+        let th = HighlightTheme::default();
+        let mut result: Vec<(Range<usize>, JsonHighlight)> = Vec::new();
+        let chars: Vec<char> = line.chars().collect();
+        let mut i = 0usize;
+        let mut in_string = false;
+        let mut escape = false;
+        let mut string_start = 0usize;
 
-        if in_string {
-            buf.push(c);
-            if escape {
-                escape = false;
-            } else if c == '\\' {
-                escape = true;
-            } else if c == '"' {
-                // Fechou string -> decidir se é "Key" olhando próximo token significativo
-                let mut kind = Kind::String;
-                let mut j = i + 1;
-                while j < chars.len() && chars[j].is_whitespace() {
-                    j += 1;
+        while i < chars.len() {
+            let byte_pos = chars[..i].iter().map(|c| c.len_utf8()).sum::<usize>();
+            let c = chars[i];
+
+            if in_string {
+                if escape {
+                    escape = false;
+                } else if c == '\\' {
+                    escape = true;
+                } else if c == '"' {
+                    let end_byte = chars[..=i].iter().map(|c| c.len_utf8()).sum::<usize>();
+                    // Determine if this is a key (followed by ':')
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j].is_whitespace() {
+                        j += 1;
+                    }
+                    let color = if j < chars.len() && chars[j] == ':' {
+                        th.key
+                    } else {
+                        th.string
+                    };
+                    result.push((string_start..end_byte, JsonHighlight(color)));
+                    in_string = false;
                 }
-                if j < chars.len() && chars[j] == ':' {
-                    kind = Kind::Key;
-                }
-                flush(kind, &mut buf, &mut out);
-                in_string = false;
+                i += 1;
+                continue;
             }
-            i += 1;
-            continue;
-        }
 
-        match c {
-            '"' => {
-                flush(Kind::Default, &mut buf, &mut out);
-                in_string = true;
-                buf.push(c);
-                i += 1;
-            }
-            ':' | '{' | '}' | '[' | ']' | ',' => {
-                flush(Kind::Default, &mut buf, &mut out);
-                out.push(Span::new(c.to_string()).color(th.punct));
-                i += 1;
-            }
-            _ if c.is_ascii_digit() || c == '-' => {
-                flush(Kind::Default, &mut buf, &mut out);
-                let start = i;
-                i += 1;
-                while i < chars.len() && (chars[i].is_ascii_digit() || ".eE+-".contains(chars[i])) {
+            match c {
+                '"' => {
+                    string_start = byte_pos;
+                    in_string = true;
                     i += 1;
                 }
-                let num: String = chars[start..i].iter().collect();
-                out.push(Span::new(num).color(th.number));
-            }
-            't' if src[i..].starts_with("true") => {
-                flush(Kind::Default, &mut buf, &mut out);
-                out.push(Span::new("true").color(th.boolean));
-                i += 4;
-            }
-            'f' if src[i..].starts_with("false") => {
-                flush(Kind::Default, &mut buf, &mut out);
-                out.push(Span::new("false").color(th.boolean));
-                i += 5;
-            }
-            'n' if src[i..].starts_with("null") => {
-                flush(Kind::Default, &mut buf, &mut out);
-                out.push(Span::new("null").color(th.null_));
-                i += 4;
-            }
-            _ => {
-                buf.push(c);
-                i += 1;
+                ':' | '{' | '}' | '[' | ']' | ',' => {
+                    let end_byte = byte_pos + c.len_utf8();
+                    result.push((byte_pos..end_byte, JsonHighlight(th.punct)));
+                    i += 1;
+                }
+                _ if c.is_ascii_digit() || c == '-' => {
+                    let start_byte = byte_pos;
+                    i += 1;
+                    while i < chars.len()
+                        && (chars[i].is_ascii_digit() || ".eE+-".contains(chars[i]))
+                    {
+                        i += 1;
+                    }
+                    let end_byte = chars[..i].iter().map(|c| c.len_utf8()).sum::<usize>();
+                    result.push((start_byte..end_byte, JsonHighlight(th.number)));
+                }
+                't' if line[byte_pos..].starts_with("true") => {
+                    result.push((byte_pos..byte_pos + 4, JsonHighlight(th.boolean)));
+                    i += 4;
+                }
+                'f' if line[byte_pos..].starts_with("false") => {
+                    result.push((byte_pos..byte_pos + 5, JsonHighlight(th.boolean)));
+                    i += 5;
+                }
+                'n' if line[byte_pos..].starts_with("null") => {
+                    result.push((byte_pos..byte_pos + 4, JsonHighlight(th.null_)));
+                    i += 4;
+                }
+                _ => {
+                    i += 1;
+                }
             }
         }
+
+        result.into_iter()
     }
 
-    flush(Kind::Default, &mut buf, &mut out);
-    out
+    fn current_line(&self) -> usize {
+        self.current_line
+    }
 }
