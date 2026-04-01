@@ -3,20 +3,24 @@
 mod collection;
 mod json_highlight;
 mod request;
+mod undo;
 
 use crate::collection::{Collection, SavedRequest};
 use crate::request::{Auth, HttpMethod, HttpRequest};
+use crate::undo::UndoStack;
+use iced::keyboard;
 use iced::widget::{
-    button, column, container, horizontal_rule, pick_list, radio, row, scrollable,
-    text, text_editor,
+    button, column, container, horizontal_rule, pick_list, radio, row, scrollable, text,
+    text_editor,
     text_editor::{Action, Content},
     text_input,
 };
-use iced::{Font, Length, Task, Theme};
+use iced::{Font, Length, Subscription, Task, Theme};
 
 fn main() -> iced::Result {
     iced::application("PatchLite", App::update, App::view)
         .theme(|_| Theme::TokyoNight)
+        .subscription(App::subscription)
         .run_with(App::new)
 }
 
@@ -24,9 +28,11 @@ struct App {
     request: HttpRequest,
     request_headers: Vec<(String, String)>,
     request_body_content: Content,
+    body_undo: UndoStack,
     tab: Tab,
     response_status: Option<String>,
     response_body: Option<String>,
+    response_content: Content,
     // Collections
     collection: Collection,
     save_name: String,
@@ -39,9 +45,11 @@ impl Default for App {
             request: HttpRequest::default(),
             request_headers: Vec::new(),
             request_body_content: Content::new(),
+            body_undo: UndoStack::new(),
             tab: Tab::None,
             response_status: None,
             response_body: None,
+            response_content: Content::new(),
             collection: Collection::default(),
             save_name: String::new(),
             selected_request: None,
@@ -68,6 +76,9 @@ enum Message {
     UpdateHeaderValue(usize, String),
     RemoveHeaderRow(usize),
     AddHeaderRow,
+    ResponseAction(Action),
+    BodyUndo,
+    BodyRedo,
     // Collections
     SaveRequest,
     LoadRequest(usize),
@@ -155,13 +166,21 @@ impl App {
             Message::RequestCompleted(result) => match result {
                 Ok((status, body)) => {
                     self.response_status = Some(status);
+                    let pretty = json_highlight::pretty_json_str(&body);
+                    self.response_content = Content::with_text(&pretty);
                     self.response_body = Some(body);
                 }
                 Err(e) => {
                     self.response_status = Some("Error".to_string());
+                    self.response_content = Content::with_text(&e);
                     self.response_body = Some(e);
                 }
             },
+            Message::ResponseAction(action) => {
+                if !action.is_edit() {
+                    self.response_content.perform(action);
+                }
+            }
             Message::UpdateMethod(new_method) => {
                 self.request.method = Some(new_method);
             }
@@ -181,8 +200,38 @@ impl App {
                 self.request.token = token;
             }
             Message::UpdateBody(action) => {
+                if let Action::Edit(ref edit) = action {
+                    use iced::widget::text_editor::Edit;
+                    let kind = match edit {
+                        Edit::Insert(c) if c.is_whitespace() || c.is_ascii_punctuation() => {
+                            undo::EditKind::InsertBreak
+                        }
+                        Edit::Insert(_) => undo::EditKind::Insert,
+                        Edit::Paste(_) => undo::EditKind::Paste,
+                        Edit::Enter => undo::EditKind::Enter,
+                        Edit::Backspace | Edit::Delete => undo::EditKind::Delete,
+                    };
+                    let current = self.request_body_content.text().to_string();
+                    self.body_undo.on_before_edit(&current, kind);
+                }
                 self.request_body_content.perform(action);
                 self.request.body = Some(self.request_body_content.text().to_string());
+            }
+            Message::BodyUndo => {
+                let current = self.request_body_content.text().to_string();
+                if let Some(prev) = self.body_undo.undo(&current) {
+                    self.request_body_content = Content::with_text(prev);
+                    self.request.body = Some(self.request_body_content.text().to_string());
+                    self.body_undo.pop_undo();
+                }
+            }
+            Message::BodyRedo => {
+                let current = self.request_body_content.text().to_string();
+                if let Some(next) = self.body_undo.redo(&current) {
+                    self.request_body_content = Content::with_text(next);
+                    self.request.body = Some(self.request_body_content.text().to_string());
+                    self.body_undo.pop_redo();
+                }
             }
             Message::UpdateHeaderKey(i, key) => {
                 if let Some(header) = self.request_headers.get_mut(i) {
@@ -208,6 +257,7 @@ impl App {
                 self.request = HttpRequest::default();
                 self.request_headers.clear();
                 self.request_body_content = Content::new();
+                self.body_undo.clear();
                 self.selected_request = None;
             }
             // Collections
@@ -253,6 +303,7 @@ impl App {
                         self.request.body = None;
                     }
                     self.selected_request = Some(i);
+                    self.body_undo.clear();
                 }
             }
             Message::DeleteRequest(i) => {
@@ -292,19 +343,33 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, req)| {
+                let method_color = HttpMethod::from_str(&req.method)
+                    .map(|m| m.color())
+                    .unwrap_or(iced::Color::from_rgb(0.5, 0.5, 0.5));
+
+                // Colored left border accent
+                let accent_bar = container(text(""))
+                    .width(3)
+                    .height(Length::Fixed(20.0))
+                    .style(move |_: &Theme| container::Style {
+                        background: Some(iced::Background::Color(method_color)),
+                        border: iced::Border::default().rounded(1),
+                        ..Default::default()
+                    });
+
                 let method_text = text(req.method.as_str())
                     .size(11)
                     .font(Font::MONOSPACE);
                 let name_text = text(req.name.as_str()).size(13);
 
-                let entry = button(
-                    row![method_text, name_text]
-                        .spacing(6)
-                        .padding(4),
-                )
-                .on_press(Message::LoadRequest(i))
-                .width(Length::Fill)
-                .padding(0);
+                let card_content = row![accent_bar, method_text, name_text]
+                    .spacing(6)
+                    .align_y(iced::Alignment::Center);
+
+                let entry = button(card_content)
+                    .on_press(Message::LoadRequest(i))
+                    .width(Length::Fill)
+                    .padding([4, 6]);
 
                 let delete_btn = button(text("x").size(11))
                     .on_press(Message::DeleteRequest(i))
@@ -353,9 +418,25 @@ impl App {
             HttpMethod::DELETE,
         ];
 
-        // URL bar
+        // URL bar — with colored accent for the selected method
+        let method_color = self
+            .request
+            .method
+            .map(|m| m.color())
+            .unwrap_or(iced::Color::from_rgb(0.4, 0.4, 0.4));
+
+        let method_indicator = container(text(""))
+            .width(4)
+            .height(Length::Fixed(28.0))
+            .style(move |_: &Theme| container::Style {
+                background: Some(iced::Background::Color(method_color)),
+                border: iced::Border::default().rounded(2),
+                ..Default::default()
+            });
+
         let url_bar = container(
             row![
+                method_indicator,
                 pick_list(method_pick_list, self.request.method, Message::UpdateMethod)
                     .placeholder("Method"),
                 text_input("Enter URL...", self.request.url.as_str())
@@ -499,9 +580,28 @@ impl App {
         content.height(Length::Fill).into()
     }
 
+    fn subscription(_state: &Self) -> Subscription<Message> {
+        keyboard::on_key_press(|key, modifiers| {
+            if !modifiers.command() {
+                return None;
+            }
+            match key {
+                keyboard::Key::Character(c) if c.as_str() == "z" => {
+                    if modifiers.shift() {
+                        Some(Message::BodyRedo)
+                    } else {
+                        Some(Message::BodyUndo)
+                    }
+                }
+                keyboard::Key::Character(c) if c.as_str() == "y" => Some(Message::BodyRedo),
+                _ => None,
+            }
+        })
+    }
+
     fn view_response(&self) -> iced::Element<'_, Message> {
         match (&self.response_status, &self.response_body) {
-            (Some(status), Some(body)) => {
+            (Some(status), Some(_body)) => {
                 let status_bar = container(
                     text(format!("Status: {}", status))
                         .font(Font::MONOSPACE)
@@ -509,31 +609,16 @@ impl App {
                 )
                 .padding([6, 10]);
 
-                // Use Rich text for JSON highlighting if body is not too large
-                let body_widget: iced::Element<'_, Message> = if body.len() > 100_000 {
-                    // Fall back to plain text for very large responses
-                    scrollable(
-                        container(
-                            text(json_highlight::pretty_json_str(body))
-                                .font(Font::MONOSPACE)
-                                .size(13),
+                let body_widget: iced::Element<'_, Message> =
+                    text_editor(&self.response_content)
+                        .font(Font::MONOSPACE)
+                        .size(13)
+                        .highlight_with::<json_highlight::JsonHighlighter>(
+                            json_highlight::JsonHighlighterSettings,
+                            |highlight, _theme| highlight.to_format(),
                         )
-                        .padding(10),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into()
-                } else {
-                    let highlighted = json_highlight::rich_json_str(body);
-                    let inner: iced::Element<'_, ()> = scrollable(
-                        container(highlighted.width(Length::Fill))
-                            .padding(10),
-                    )
-                    .width(Length::Fill)
-                    .height(Length::Fill)
-                    .into();
-                    inner.map(|()| Message::Init)
-                };
+                        .on_action(Message::ResponseAction)
+                        .into();
 
                 container(
                     column![status_bar, horizontal_rule(1), body_widget,]

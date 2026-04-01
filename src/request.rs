@@ -71,6 +71,17 @@ impl HttpMethod {
             _ => None,
         }
     }
+
+    /// Swagger-style color for each HTTP method.
+    pub fn color(&self) -> iced::Color {
+        match self {
+            HttpMethod::GET => iced::Color::from_rgb8(97, 175, 254),    // blue
+            HttpMethod::POST => iced::Color::from_rgb8(73, 204, 144),   // green
+            HttpMethod::PUT => iced::Color::from_rgb8(252, 161, 48),    // orange
+            HttpMethod::PATCH => iced::Color::from_rgb8(80, 227, 194),  // teal
+            HttpMethod::DELETE => iced::Color::from_rgb8(249, 62, 62),  // red
+        }
+    }
 }
 
 #[derive(Default, Clone)]
